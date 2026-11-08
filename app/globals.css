@@ -1,0 +1,6 @@
+@tailwind base; @tailwind components; @tailwind utilities;
+body { background: #FFF9F0; color: #1A1A1A; }
+/* Space for the fixed mobile bottom nav (safe-area aware). */
+@media (max-width: 767px) {
+  body { padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px)); }
+}
