@@ -5,16 +5,26 @@ import { OrderRow } from '@/lib/supabase';
 import { formatDT, STATUS_LABELS } from '@/lib/format';
 import { ERR } from '@/lib/errors';
 import Link from 'next/link';
+import { fetchOwnRole, ROLE_HOME, ROLE_LABEL, type AppRole } from '@/lib/useRole';
 
 // The profile row is created server-side by the DB trigger on auth.users
 // (role hardcoded 'customer'); the browser never inserts a profile (F05).
+// After login, staff roles are redirected to their own workspace.
 export default function ComptePage() {
   const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [fullName, setFullName] = useState('');
   const [userEmail, setUserEmail] = useState<string | null>(null); const [userId, setUserId] = useState<string | null>(null);
+  const [role, setRole] = useState<AppRole | null>(null);
   const [orders, setOrders] = useState<OrderRow[]>([]); const [msg, setMsg] = useState(''); const [mode, setMode] = useState<'login' | 'signup'>('login');
-  useEffect(() => { (async () => { const sb = createClient(); const { data } = await sb.auth.getUser(); if (data.user) { setUserEmail(data.user.email ?? null); setUserId(data.user.id); } })(); }, []);
+  const [denied, setDenied] = useState(false);
   useEffect(() => {
-    if (!userId) return;
+    setDenied(new URLSearchParams(window.location.search).get('denied') === '1');
+    (async () => {
+      const sb = createClient(); const { data } = await sb.auth.getUser();
+      if (data.user) { setUserEmail(data.user.email ?? null); setUserId(data.user.id); setRole(await fetchOwnRole()); }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!userId || role !== 'customer') return;
     (async () => {
       try {
         const sb = createClient();
@@ -22,7 +32,12 @@ export default function ComptePage() {
         setOrders((data as OrderRow[]) ?? []);
       } catch { setOrders([]); }
     })();
-  }, [userId]);
+  }, [userId, role]);
+  // Only a same-site relative path is honoured (middleware sets ?next= for gated pages).
+  function safeNext(): string | null {
+    const n = new URLSearchParams(window.location.search).get('next');
+    return n && n.startsWith('/') && !n.startsWith('//') ? n : null;
+  }
   async function auth(e: React.FormEvent) {
     e.preventDefault(); setMsg('');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setMsg('E-mail invalide.'); return; }
@@ -33,7 +48,10 @@ export default function ComptePage() {
         const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
         const { data } = await sb.auth.getUser();
-        setUserEmail(data.user?.email ?? null); setUserId(data.user?.id ?? null); setMsg('Connexion réussie.');
+        setUserEmail(data.user?.email ?? null); setUserId(data.user?.id ?? null);
+        const r = await fetchOwnRole();
+        // Full navigation so middleware re-checks the fresh session cookie.
+        window.location.assign(safeNext() ?? ROLE_HOME[r ?? 'customer']);
       } else {
         const { error } = await sb.auth.signUp({ email, password, options: { data: { full_name: fullName || null } } });
         if (error) throw error;
@@ -41,9 +59,17 @@ export default function ComptePage() {
       }
     } catch { setMsg(ERR.auth); }
   }
-  async function logout() { const sb = createClient(); await sb.auth.signOut(); setUserEmail(null); setUserId(null); setOrders([]); }
+  async function logout() { const sb = createClient(); await sb.auth.signOut(); setUserEmail(null); setUserId(null); setRole(null); setOrders([]); }
+  const workspace = role === 'admin'
+    ? { href: '/admin', title: 'Administration', desc: 'Demandes partenaires, restaurants et toutes les commandes.' }
+    : role === 'restaurant'
+    ? { href: '/resto', title: 'Espace restaurant', desc: 'Commandes du jour et menu de votre restaurant.' }
+    : role === 'courier'
+    ? { href: '/livreur', title: 'Espace livreur', desc: 'Livraisons à récupérer et en cours.' }
+    : { href: '/', title: 'Voir les restaurants', desc: 'Commander vos plats préférés à Sidi Bouzid.' };
   if (!userEmail) return (<div className="max-w-md mx-auto px-4 py-12">
     <h1 className="text-2xl font-extrabold">Mon compte</h1>
+    {denied && <p className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 mt-4 text-sm font-bold">Accès refusé : votre compte n&apos;a pas le rôle nécessaire pour cet espace.</p>}
     <div className="flex gap-2 mt-6"><button onClick={() => setMode('login')} className={`flex-1 py-2 rounded-full font-bold ${mode === 'login' ? 'bg-[#1A1A1A] text-white' : 'bg-white'}`}>Connexion</button><button onClick={() => setMode('signup')} className={`flex-1 py-2 rounded-full font-bold ${mode === 'signup' ? 'bg-[#1A1A1A] text-white' : 'bg-white'}`}>Inscription</button></div>
     <form onSubmit={auth} className="bg-white rounded-2xl p-5 mt-4 space-y-3">
       {mode === 'signup' && <input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Nom complet" maxLength={100} className="w-full border rounded-xl px-4 py-3 outline-none" />}
@@ -54,9 +80,13 @@ export default function ComptePage() {
     </form>
     <p className="text-sm text-center mt-4"><Link href="/devenir-partenaire" className="underline">Vous êtes restaurateur ? Devenir partenaire</Link></p></div>);
   return (<div className="max-w-3xl mx-auto px-4 py-8">
-    <div className="flex items-center justify-between"><div><h1 className="text-2xl font-extrabold">Mon compte</h1><p className="text-gray-500">{userEmail}</p></div><button onClick={logout} className="bg-white shadow px-4 py-2 rounded-full font-bold text-sm">Déconnexion</button></div>
-    <h2 className="font-bold text-lg mt-8">Historique des commandes</h2>
-    {orders.length === 0 ? <p className="bg-white rounded-2xl p-6 mt-3 text-gray-500">Aucune commande pour le moment.</p> : <div className="space-y-3 mt-3">{orders.map(o => (<Link key={o.id} href={`/suivi/${o.order_number}`} className="block bg-white rounded-2xl p-4 shadow-sm"><div className="flex justify-between"><span className="font-bold">{o.order_number}</span><span className="font-bold">{formatDT(o.total)}</span></div><p className="text-sm text-gray-500">{o.dlv_restaurants?.name ?? ''} · {STATUS_LABELS[o.status] ?? o.status} · {new Date(o.created_at).toLocaleDateString('fr-FR')}</p></Link>))}</div>}
-    <p className="mt-6 text-sm"><Link href="/commandes" className="underline">Toutes mes commandes</Link> · <Link href="/menu" className="underline">Menu et paramètres</Link></p>
+    <div className="flex items-center justify-between"><div><h1 className="text-2xl font-extrabold">Mon compte</h1><p className="text-gray-500">{userEmail}</p>{role && <span className="inline-block mt-2 bg-[#FFC244] text-[#1A1A1A] text-xs font-bold px-3 py-1 rounded-full">{ROLE_LABEL[role]}</span>}</div><button onClick={logout} className="bg-white shadow px-4 py-2 rounded-full font-bold text-sm">Déconnexion</button></div>
+    {denied && <p className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 mt-4 text-sm font-bold">Accès refusé : votre compte n&apos;a pas le rôle nécessaire pour cet espace.</p>}
+    <Link href={workspace.href} className="block bg-[#FFC244] rounded-2xl p-5 mt-6 shadow-sm"><span className="font-extrabold text-lg block">{workspace.title} ›</span><span className="text-sm text-[#1A1A1A]/70">{workspace.desc}</span></Link>
+    {role === 'customer' && (<>
+      <h2 className="font-bold text-lg mt-8">Historique des commandes</h2>
+      {orders.length === 0 ? <p className="bg-white rounded-2xl p-6 mt-3 text-gray-500">Aucune commande pour le moment.</p> : <div className="space-y-3 mt-3">{orders.map(o => (<Link key={o.id} href={`/suivi/${o.order_number}`} className="block bg-white rounded-2xl p-4 shadow-sm"><div className="flex justify-between"><span className="font-bold">{o.order_number}</span><span className="font-bold">{formatDT(o.total)}</span></div><p className="text-sm text-gray-500">{o.dlv_restaurants?.name ?? ''} · {STATUS_LABELS[o.status] ?? o.status} · {new Date(o.created_at).toLocaleDateString('fr-FR')}</p></Link>))}</div>}
+    </>)}
+    <p className="mt-6 text-sm">{role === 'customer' && <><Link href="/commandes" className="underline">Toutes mes commandes</Link> · </>}<Link href="/menu" className="underline">Menu et paramètres</Link></p>
   </div>);
 }
