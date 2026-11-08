@@ -1,12 +1,17 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCart } from '@/lib/cart';
 import { supabase, Zone } from '@/lib/supabase';
 import { formatDT } from '@/lib/format';
 import { ERR } from '@/lib/errors';
 import { getStoredCity } from '@/lib/city';
+import { SIDI_BOUZID_CENTER } from '@/components/DeliveryMap';
+
+// Leaflet needs the browser: never SSR the map.
+const DeliveryMap = dynamic(() => import('@/components/DeliveryMap'), { ssr: false, loading: () => <div className="w-full rounded-2xl border bg-gray-50 p-4 text-sm text-gray-500" style={{ height: 240 }}>Chargement de la carte…</div> });
 
 // Checkout posts to /api/orders only. The browser NEVER sends prices or
 // totals: the server re-fetches dish prices and recomputes everything.
@@ -18,6 +23,9 @@ export default function CheckoutPage() {
   const [address, setAddress] = useState(''); const [zoneId, setZoneId] = useState('');
   const [notes, setNotes] = useState(''); const [payment, setPayment] = useState<'cash' | 'card_on_delivery'>('cash');
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  // Optional pin dropped on the map (v3). Null = skipped: the server falls
+  // back to the zone centroid.
+  const [pin, setPin] = useState<{ lat: number; lng: number } | null>(null);
   useEffect(() => { (async () => { try { const { data } = await supabase.from('dlv_zones').select('*').eq('active', true).order('name'); const city = getStoredCity(); setZones(((data as Zone[]) ?? []).filter((z) => (z.city ?? 'Tunis') === city)); const saved = localStorage.getItem('wasalni-zone'); if (saved) setZoneId(saved); } catch {} })(); }, []);
   const zone = zones.find(z => z.id === zoneId);
   const deliveryFee = !zone ? 0 : (subtotal >= Number(zone.free_delivery_over ?? 0) && Number(zone.free_delivery_over ?? 0) > 0 ? 0 : Number(zone.delivery_fee ?? 0));
@@ -38,6 +46,7 @@ export default function CheckoutPage() {
           zone_id: zoneId, restaurant_id: restaurantId,
           items: items.map(i => ({ dish_id: i.dishId, qty: i.qty })),
           payment_method: payment, notes: notes.trim() || null,
+          delivery_lat: pin?.lat ?? null, delivery_lng: pin?.lng ?? null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -55,6 +64,24 @@ export default function CheckoutPage() {
       <div><label className="font-semibold text-sm">Téléphone</label><input required value={phone} onChange={e => setPhone(e.target.value)} inputMode="tel" className="w-full mt-1 border rounded-xl px-4 py-3 outline-none focus:border-yellow-500" placeholder="20 123 456" /></div>
       <div><label className="font-semibold text-sm">Adresse de livraison</label><input required value={address} onChange={e => setAddress(e.target.value)} maxLength={300} className="w-full mt-1 border rounded-xl px-4 py-3 outline-none focus:border-yellow-500" placeholder="Rue, immeuble, quartier…" /></div>
       <div><label className="font-semibold text-sm">Zone</label><select required value={zoneId} onChange={e => setZoneId(e.target.value)} className="w-full mt-1 border rounded-xl px-4 py-3 bg-white outline-none"><option value="">Choisir une zone…</option>{zones.map(z => <option key={z.id} value={z.id}>{z.name} — {formatDT(z.delivery_fee)}{Number(z.free_delivery_over) > 0 ? ` (gratuite dès ${formatDT(z.free_delivery_over)})` : ''}</option>)}</select></div>
+      <div>
+        <label className="font-semibold text-sm">Précisez votre position (optionnel)</label>
+        <p className="text-xs text-gray-500 mt-1">Touchez la carte pour placer votre position exacte — le livreur vous trouvera plus vite. Vous pouvez passer cette étape.</p>
+        <div className="mt-2">
+          <DeliveryMap
+            interactive
+            height={240}
+            center={(zone && zone.lat != null && zone.lng != null) ? { lat: Number(zone.lat), lng: Number(zone.lng) } : SIDI_BOUZID_CENTER}
+            pick={pin}
+            onPick={(lat, lng) => setPin({ lat, lng })}
+          />
+        </div>
+        {pin ? (
+          <p className="text-xs text-gray-600 mt-2">Position choisie : {pin.lat.toFixed(5)}, {pin.lng.toFixed(5)} — <button type="button" onClick={() => setPin(null)} className="underline font-semibold">Retirer le point</button></p>
+        ) : (
+          <p className="text-xs text-gray-500 mt-2">Aucun point placé — la position de votre zone sera utilisée.</p>
+        )}
+      </div>
       <div><label className="font-semibold text-sm">Notes (optionnel)</label><textarea value={notes} onChange={e => setNotes(e.target.value)} maxLength={500} className="w-full mt-1 border rounded-xl px-4 py-3 outline-none" rows={2} placeholder="Instructions pour le livreur…" /></div>
       <fieldset><legend className="font-semibold text-sm">Paiement</legend>
         <label className="flex items-center gap-3 border rounded-xl px-4 py-3 mt-2 cursor-pointer"><input type="radio" name="pay" checked={payment === 'cash'} onChange={() => setPayment('cash')} /> Espèces à la livraison</label>

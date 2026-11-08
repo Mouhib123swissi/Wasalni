@@ -33,6 +33,10 @@ export async function POST(req: Request) {
       p_items: v.items,
       p_payment_method: v.payment_method,
       p_notes: v.notes ?? null,
+      // v3: optional pin from the checkout map; null = server falls back
+      // to the zone centroid (fallback lives in the create_order RPC).
+      p_delivery_lat: v.delivery_lat ?? null,
+      p_delivery_lng: v.delivery_lng ?? null,
     });
     if (error || !data) {
       console.error('create_order failed', error?.message ?? 'no data');

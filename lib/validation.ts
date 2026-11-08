@@ -17,6 +17,10 @@ export const checkoutSchema = z.object({
   })).min(1, 'Panier vide').max(20),
   payment_method: z.enum(['cash', 'card_on_delivery']),
   notes: z.string().max(500, 'Notes trop longues').optional().nullable(),
+  // Optional pin dropped on the checkout map (v3). Null = skipped: the
+  // server falls back to the zone centroid. Ranges validated here.
+  delivery_lat: z.number().min(-90, 'Latitude invalide').max(90, 'Latitude invalide').optional().nullable(),
+  delivery_lng: z.number().min(-180, 'Longitude invalide').max(180, 'Longitude invalide').optional().nullable(),
 });
 
 export const dishSchema = z.object({
